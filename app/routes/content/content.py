@@ -69,11 +69,10 @@ async def generate_summary(pdf_file: UploadFile):
         raw_key_concepts = await generation_service.getKeyConcepts({
            "question" : "Generate me the key points of the document and a short description for each key point. Give me response in the following format: Name of Key Point 1: Description 1\n\n Name of Key Point 2: Description 2\n\n Name of Key Point 3: Description 3 etc. Don't give me any other text or extra strings. Just give me the response in the format I asked. Always generate atleast 3 key points each with a name and description."}
            )
-        print(raw_key_concepts)
         key_concepts = [
             {"key_concept": concept["key_point"], "description": concept["description"]}
             for concept in raw_key_concepts
-        ]  # Include both key_concept and description
+        ]  # Map key_point to key_concept
 
         # Use key concepts as topics (for simplicity)
         topics = [concept["key_concept"] for concept in key_concepts]
@@ -90,7 +89,7 @@ async def generate_summary(pdf_file: UploadFile):
         # Format the response
         formatted_response = {
             "summary": summary.strip(),
-            "key_concepts": raw_key_concepts,
+            "key_concepts": key_concepts,  # Use the corrected key_concepts
             "topics": topics,
             "quizzes": quizzes,
         }

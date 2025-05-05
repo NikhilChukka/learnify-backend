@@ -22,7 +22,7 @@ class GenerationService:
     def __init__(self, file_path: str):
         self.file_path = file_path
         self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
-        self.llm = init_chat_model("llama3-8b-8192", model_provider="groq")
+        self.llm = init_chat_model("llama-3.3-70b-versatile", model_provider="groq")
         self.vector_store = InMemoryVectorStore(embedding=self.embeddings)
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, add_start_index=True)
         self.prompt = hub.pull("rlm/rag-prompt")
@@ -54,8 +54,9 @@ class GenerationService:
 
         def generate(state: State):
             docs_content = '\n\n'.join([doc.page_content for doc in state["context"]])
-            messages = {"question": state["question"], "context": docs_content}  # Ensure messages is a dict
-            response = self.llm.invoke(messages)
+            # Format the input as a string
+            formatted_input = f"Question: {state['question']}\n\nContext:\n{docs_content}"
+            response = self.llm.invoke(formatted_input)  # Pass the formatted string
             state["answer"] = response.content.strip()  # Ensure the response is properly extracted
             return state  # Return the updated state as a dict
 
@@ -71,12 +72,45 @@ class GenerationService:
     
     async def getKeyConcepts(self, question1: dict) -> dict:
         graph = await self.process()
-        question1 = {"question" : "Generate me the key points of the document and a short description for each key point. Give me response in the following format: Name of Key Point 1: Description 1\n\n Name of Key Point 2: Description 2\n\n Name of Key Point 3: Description 3 etc. Don't give me any other text or extra strings. Just give me the response in the format I asked. Always generate atleast 3 key points each with a name and description."}         
-        result = graph.invoke(question1)
-        output = result["answer"].strip().split("\n\n")[1].split("\n")
-        key_concepts = [{"key_point": item.split(":")[0].strip(), "description": item.split(":")[1].strip()} for item in output if ":" in item]
-        
-        return key_concepts
+        generated_key_concepts = []
+        max_retries = 3  # Limit the number of retries to avoid infinite loops
+
+        for _ in range(max_retries):
+            # Include already generated key concepts in the prompt to avoid duplicates
+            existing_concepts = "\n".join(
+                [f"{concept['key_point']}: {concept['description']}" for concept in generated_key_concepts]
+            )
+            question_text = (
+                "Generate me the key points of the document and a short description for each key point. "
+                "Give me response in the following format: Name of Key Point 1: Description 1\n\n "
+                "Name of Key Point 2: Description 2\n\n Name of Key Point 3: Description 3 etc. "
+                "Don't give me any other text or extra strings. Just give me the response in the format I asked. "
+                "Always generate at least 3 key points each with a name and description."
+            )
+            if existing_concepts:
+                question_text += f"\n\nAvoid generating the following key concepts:\n{existing_concepts}"
+
+            question1["question"] = question_text
+            result = graph.invoke(question1)
+            output = result["answer"].strip().split("\n\n")[1].split("\n")
+            new_key_concepts = [
+                {"key_point": item.split(":")[0].strip(), "description": item.split(":")[1].strip()}
+                for item in output if ":" in item
+            ]
+
+            # Add new key concepts to the list, avoiding duplicates
+            for concept in new_key_concepts:
+                if concept not in generated_key_concepts:
+                    generated_key_concepts.append(concept)
+
+            # Stop retrying if we have at least 3 unique key concepts
+            if len(generated_key_concepts) >= 3:
+                break
+
+        if len(generated_key_concepts) < 3:
+            raise ValueError("Insufficient key concepts generated. Ensure the document has enough content.")
+
+        return generated_key_concepts
     
     async def getKeyConceptDetails(self, concept: str) -> str:
         """
@@ -85,7 +119,7 @@ class GenerationService:
         graph = await self.process()
         question = {"question": f"Provide detailed information about the key concept: {concept}"}
         result = graph.invoke(question)
-        detailed_info = result['answer'].content.strip()
+        detailed_info = result['answer'].strip()  # Removed `.content` as `result['answer']` is already a string
         return detailed_info
 
     async def generateQuizzesForKeyConcept(self, concept: str) -> List[dict]:
@@ -95,7 +129,7 @@ class GenerationService:
         graph = await self.process()
         question = {"question": f"Generate 3 quiz questions and answers for the key concept: {concept}"}
         result = graph.invoke(question)
-        quizzes_raw = result['answer'].content.strip().split("\n\n")
+        quizzes_raw = result['answer'].strip().split("\n\n")
         quizzes = []
         for quiz in quizzes_raw:
             if ":" in quiz:
@@ -110,7 +144,7 @@ class GenerationService:
         graph = await self.process()
         question = {"question": f"Generate 10 flashcards (question-answer pairs) for the key concept: {concept}"}
         result = graph.invoke(question)
-        flashcards_raw = result['answer'].content.strip().split("\n\n")
+        flashcards_raw = result['answer'].strip().split("\n\n")
         flashcards = []
         for flashcard in flashcards_raw:
             if ":" in flashcard:
@@ -126,7 +160,7 @@ if __name__ == "__main__":
         
     resultsKeyConcepts = asyncio.run(service.getKeyConcepts(question1))
 
-    output = resultsKeyConcepts['answer'].content.strip().split("\n\n")[1].split("\n")
+    output = resultsKeyConcepts['answer'].strip().split("\n\n")[1].split("\n")
     key_concepts = [{"key_point": item.split(":")[0].strip(), "description": item.split(":")[1].strip()} for item in output if ":" in item]
     print("output ",  output, "\nKey Concepts List:\n", key_concepts, "\n\n")
 
